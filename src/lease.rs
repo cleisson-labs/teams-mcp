@@ -988,6 +988,12 @@ mod tests {
     }
 
     #[test]
+    fn endpoint_url_parser_requires_ascii_hostnames() {
+        assert!(Url::parse("https://example.test").is_ok());
+        assert!(Url::parse("https://café.example").is_err());
+    }
+
+    #[test]
     fn requests_resolve_only_to_allowlisted_paths_under_trusted_region_roots() {
         let endpoints = Endpoints::default();
         let regions = json!({"chatServiceAfd":"https://teams.microsoft.com/api/chatsvc/emea","chatSvcAggAfd":"https://teams.cloud.microsoft/api/csa/emea","middleTier":"https://teams.microsoft.com/api/mt/part/emea-02"});
