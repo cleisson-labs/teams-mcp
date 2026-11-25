@@ -214,18 +214,9 @@ impl Lease {
             let grant = parse_grant((self.mint)().await?)?;
             let fresh = grant.covers(need);
             if self.log {
-                // Diagnostics only: remaining minutes per token, never token values.
-                let left = |secret: &Option<Secret>| {
-                    secret
-                        .as_ref()
-                        .map_or(-1, |s| (s.expires_at as i64 - now() as i64) / 60)
-                };
-                eprintln!(
-                    "teams-mcp: lease minted spacesMin={} searchMin={} channelsMin={} fresh={fresh}",
-                    left(&grant.spaces),
-                    left(&grant.search),
-                    left(&grant.csa)
-                );
+                let expirations = [&grant.spaces, &grant.search, &grant.csa]
+                    .map(|entry| entry.as_ref().map(|value| value.expires_at));
+                eprintln!("{}", lease_diagnostic(expirations, now(), fresh));
             }
             if let Some(previous) = current.as_ref()
                 && previous.profile["id"] != grant.profile["id"]
@@ -675,6 +666,14 @@ fn failure(code: &str, message: &str) -> Failure {
     Failure::new(code, message)
 }
 
+fn lease_diagnostic(expirations: [Option<u64>; 3], observed_at: u64, fresh: bool) -> String {
+    let [spaces, search, channels] = expirations
+        .map(|expiry| expiry.map_or(-1, |at| (i128::from(at) - i128::from(observed_at)) / 60));
+    format!(
+        "teams-mcp: lease minted spacesMin={spaces} searchMin={search} channelsMin={channels} fresh={fresh}"
+    )
+}
+
 fn now() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -1072,6 +1071,14 @@ mod tests {
                 "{root}"
             );
         }
+    }
+
+    #[test]
+    fn lease_diagnostic_reports_only_expiry_minutes_and_freshness() {
+        assert_eq!(
+            lease_diagnostic([Some(1_125), Some(879), None], 1_000, false),
+            "teams-mcp: lease minted spacesMin=2 searchMin=-2 channelsMin=-1 fresh=false"
+        );
     }
 
     #[test]
