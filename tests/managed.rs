@@ -98,17 +98,19 @@ fn quote(path: &Path) -> String {
     format!("'{}'", path.to_str().unwrap().replace('\'', "'\\''"))
 }
 
-async fn output(mut command: Command) -> Value {
+async fn output(command: Command) -> Value {
+    output_and_diagnostics(command).await.0
+}
+
+async fn output_and_diagnostics(mut command: Command) -> (Value, String) {
     let result = tokio::time::timeout(Duration::from_secs(25), command.output())
         .await
         .unwrap()
         .unwrap();
-    serde_json::from_slice(&result.stdout).unwrap_or_else(|_| {
-        panic!(
-            "CLI did not return JSON: {}",
-            String::from_utf8_lossy(&result.stderr)
-        )
-    })
+    let diagnostics = String::from_utf8_lossy(&result.stderr).into_owned();
+    let value = serde_json::from_slice(&result.stdout)
+        .unwrap_or_else(|_| panic!("CLI did not return JSON: {diagnostics}"));
+    (value, diagnostics)
 }
 
 #[cfg(unix)]
@@ -441,8 +443,11 @@ async fn default_lease_transport_mints_then_stops_the_browser_soon() {
     fs::write(fixture.profile.join("fixture-bridge-response"),json!({"ok":true,"profile":{"id":"fixture-user","tenantId":"22222222-2222-4222-8222-222222222222"},"capabilities":{"chat":true},"lease":{"spaces":{"token":"fixture-spaces","expiresAt":4102444800u64}}}).to_string()).unwrap();
     let mut mint = fixture.command();
     mint.env_remove("TEAMS_TRANSPORT")
+        .env("TEAMS_MCP_LOG", "1")
         .args(["--call", "teams_get_me", "{}"]);
-    let minted = output(mint).await;
+    let (minted, diagnostics) = output_and_diagnostics(mint).await;
+    assert!(diagnostics.contains("teams-mcp: lease minted spacesMin="));
+    assert!(!diagnostics.contains("fixture-spaces"));
     assert_eq!(minted["profile"]["id"], "fixture-user");
     assert!(!minted.to_string().contains("fixture-spaces"));
     let mut call = fixture.command();
