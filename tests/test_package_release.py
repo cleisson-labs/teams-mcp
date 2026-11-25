@@ -6,7 +6,6 @@ import unittest
 import zipfile
 from pathlib import Path
 
-
 SCRIPT = Path(__file__).resolve().parents[1] / "scripts/package-release.py"
 SPEC = importlib.util.spec_from_file_location("package_release", SCRIPT)
 MODULE = importlib.util.module_from_spec(SPEC)

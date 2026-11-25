@@ -1,0 +1,8 @@
+[advisories]
+# rmcp requires chrono even in stdio-only builds. Remove this informational
+# exception when https://github.com/modelcontextprotocol/rust-sdk/issues/1469
+# is resolved and the date handling here can migrate with the SDK.
+ignore = [{ id = "RUSTSEC-2026-0543", reason = "Unmaintained chrono has no patched version and is required by rmcp." }]
+
+[licenses]
+allow = ["Apache-2.0", "MIT", "Unicode-3.0"]

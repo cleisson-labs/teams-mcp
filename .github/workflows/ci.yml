@@ -1,58 +1,115 @@
 name: CI
 
 on:
-  push:
   pull_request:
+  push:
+    branches: [main]
 
 permissions:
   contents: read
 
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
-  test:
+  security:
+    uses: cleisson-labs/.github/.github/workflows/security.yml@03f53ed9e71b2741c683c448a538f7a7b8aa1786 # v1.0.0
+
+  docs:
+    uses: cleisson-labs/.github/.github/workflows/docs.yml@03f53ed9e71b2741c683c448a538f7a7b8aa1786 # v1.0.0
+
+  rust:
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: [linux, macos]
+    uses: cleisson-labs/.github/.github/workflows/rust.yml@03f53ed9e71b2741c683c448a538f7a7b8aa1786 # v1.0.0
+    with:
+      platform: ${{ matrix.platform }}
+      msrv: ${{ matrix.platform == 'linux' && '1.89.0' || '' }}
+      coverage: ${{ matrix.platform == 'linux' }}
+
+  bridge:
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: [linux, macos]
+    uses: cleisson-labs/.github/.github/workflows/node.yml@03f53ed9e71b2741c683c448a538f7a7b8aa1786 # v1.0.0
+    with:
+      platform: ${{ matrix.platform }}
+      test-files: tests/bridge.cjs
+
+  packaging-tests:
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: [linux, macos]
+    uses: cleisson-labs/.github/.github/workflows/python.yml@03f53ed9e71b2741c683c448a538f7a7b8aa1786 # v1.0.0
+    with:
+      platform: ${{ matrix.platform }}
+
+  source-checks:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    outputs:
+      rehearse: ${{ steps.release.outputs.rehearse }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Check JavaScript lint
+        env:
+          BIOME_SHA256: 5409e32eb17b47e0d1d9bbf213b749eba1f9c35d8b18fbd2ee55971157918a57
+        run: |
+          curl --fail --silent --show-error --location --proto '=https' \
+            https://github.com/biomejs/biome/releases/download/%40biomejs/biome%402.6.9/biome-linux-x64 \
+            --output "$RUNNER_TEMP/biome"
+          printf '%s  %s\n' "$BIOME_SHA256" "$RUNNER_TEMP/biome" | sha256sum --check
+          chmod +x "$RUNNER_TEMP/biome"
+          "$RUNNER_TEMP/biome" lint --error-on-warnings src/bridge.js tests/bridge.cjs
+      - name: Check formatting on changed JavaScript lines
+        env:
+          BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: >-
+          git clang-format-18 --binary clang-format-18 --style '{BasedOnStyle: Google, ColumnLimit: 100}' --extensions js,cjs --diff "$BASE" "$GITHUB_SHA"
+      - name: Identify release changes
+        id: release
+        env:
+          BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          if git diff --quiet "$BASE" "$GITHUB_SHA" -- .github/workflows/ci.yml \
+            .github/workflows/release.yml .github/workflows/release-build.yml \
+            .github/actions/check-source scripts/package-release.py release-files.txt Cargo.toml Cargo.lock; then
+            echo 'rehearse=false' >> "$GITHUB_OUTPUT"
+          else
+            test "$?" -eq 1
+            echo 'rehearse=true' >> "$GITHUB_OUTPUT"
+          fi
+
+  release-rehearsal:
+    needs: source-checks
+    if: needs.source-checks.outputs.rehearse == 'true'
+    permissions:
+      contents: read
+    uses: $/.github/workflows/release-build.yml
+
+  source-archive:
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest]
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 20
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
-        with:
-          node-version: '24'
-      - name: Set up Rust
-        run: rustup toolchain install stable --profile minimal --component rustfmt --component clippy
-      - name: Check formatting
-        run: cargo +stable fmt --check
-      - name: Test Rust
-        run: cargo +stable test --locked
-      - name: Lint Rust
-        run: cargo +stable clippy --locked --all-targets -- -D warnings
-      - name: Test bridge
-        run: node --test tests/bridge.cjs
-      - name: Test source packaging
-        run: python3 -m unittest discover -s tests -p 'test_*.py'
-      - name: Build release
-        run: cargo +stable build --release --locked
-      - name: Check source archive
-        run: |
-          python3 scripts/package-release.py
-          python3 -m zipfile -t dist/*-source.zip
-      - name: Scan public source for secrets
-        if: runner.os == 'Linux'
-        run: |
-          curl --fail --silent --show-error --location --proto '=https' \
-            https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_linux_x64.tar.gz \
-            --output "$RUNNER_TEMP/gitleaks.tar.gz"
-          printf '%s  %s\n' '551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb' "$RUNNER_TEMP/gitleaks.tar.gz" | sha256sum --check
-          tar -xzf "$RUNNER_TEMP/gitleaks.tar.gz" -C "$RUNNER_TEMP" gitleaks
-          python3 -m zipfile -e dist/*-source.zip "$RUNNER_TEMP/teams-mcp-source"
-          "$RUNNER_TEMP/gitleaks" dir "$RUNNER_TEMP/teams-mcp-source" --redact --no-banner
+      - uses: $/.github/actions/check-source
 
   windows:
-    # Synthetic compile check only; Windows has not been live-qualified.
+    # Windows supports synthetic compilation only.
     runs-on: windows-latest
     timeout-minutes: 20
     steps:
@@ -61,7 +118,41 @@ jobs:
           persist-credentials: false
       - name: Set up Rust
         run: rustup toolchain install stable --profile minimal --component clippy
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          save-if: ${{ github.event_name == 'push' }}
+          cache-bin: false
       - name: Check
         run: cargo +stable check --locked --lib --bins
       - name: Lint
         run: cargo +stable clippy --locked --lib --bins -- -D warnings
+
+  codeql:
+    strategy:
+      fail-fast: false
+      matrix:
+        language: [actions, rust, javascript-typescript, python]
+    permissions:
+      contents: read
+      security-events: write
+    uses: cleisson-labs/.github/.github/workflows/codeql.yml@03f53ed9e71b2741c683c448a538f7a7b8aa1786 # v1.0.0
+    with:
+      language: ${{ matrix.language }}
+
+  ci-ok:
+    if: always()
+    needs: [security, docs, codeql, rust, bridge, packaging-tests, source-checks, release-rehearsal, source-archive, windows]
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    permissions: {}
+    steps:
+      - name: Require every CI job to pass
+        env:
+          RESULTS: ${{ toJSON(needs) }}
+        run: |
+          jq -e '
+            (.["source-checks"].outputs.rehearse) as $rehearse
+            | ($rehearse == "true" or $rehearse == "false")
+              and (.["release-rehearsal"].result == (if $rehearse == "true" then "success" else "skipped" end))
+              and (del(.["release-rehearsal"]) | all(.[]; .result == "success"))
+          ' <<< "$RESULTS"
