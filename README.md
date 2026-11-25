@@ -22,7 +22,7 @@ teams-mcp --status
 
 Run these commands from the extracted source directory or your Git clone.
 `cargo install` places the binary at `~/.cargo/bin/teams-mcp`;
-[versioned releases](https://github.com/cleissonom/teams-mcp/releases) also publish
+[versioned releases](https://github.com/cleisson-labs/teams-mcp/releases) also publish
 prebuilt macOS and Linux binaries. Run `teams-mcp --version` to check the installed
 version. Building requires Rust 1.89+.
 
