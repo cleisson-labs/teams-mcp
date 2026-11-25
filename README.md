@@ -1,5 +1,10 @@
 # Teams MCP — Rust
 
+[![CI](https://github.com/cleisson-labs/teams-mcp/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/cleisson-labs/teams-mcp/actions/workflows/ci.yml)
+[![License](https://img.shields.io/github/license/cleisson-labs/teams-mcp)](LICENSE)
+[![Latest release](https://img.shields.io/github/v/release/cleisson-labs/teams-mcp)](https://github.com/cleisson-labs/teams-mcp/releases/latest)
+[![Coverage report](https://img.shields.io/badge/coverage-Rust%20%26%20JS-blue)](https://github.com/cleisson-labs/teams-mcp/actions/workflows/ci.yml)
+
 An unofficial, read-only Microsoft Teams MCP server for Codex and Claude Code.
 The default source is **your existing browser's approved Teams session**. A Rust
 binary mints short-lived access tokens from that session, then calls Teams over

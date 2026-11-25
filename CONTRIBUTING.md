@@ -24,6 +24,11 @@ The GitHub Actions workflow defines synthetic checks on macOS and Linux. These
 checks must not need secrets, a signed-in browser, a paid model client or
 organization access. Synthetic checks do not establish live Teams compatibility.
 
+CI also checks the declared Rust minimum, compiles the Windows client, runs
+Ruff and Biome, and reports Rust and JavaScript coverage. Changed JavaScript
+lines follow clang-format 18 with Google style and a 100-column limit. The
+weekly dependency audit runs `cargo deny --locked check` with the project policy in `deny.toml`.
+
 ## Changes and pull requests
 
 For behavioral changes, first add a focused failing regression test, implement
@@ -90,9 +95,16 @@ For each release:
 2. Commit the release changes to `main`, create an annotated tag on that commit,
    and push the branch and tag. The tag starts the release-binary workflow for
    macOS Apple Silicon, macOS Intel and Linux x86-64.
-3. Create a draft GitHub release from the existing tag, with release notes and the
-   reviewed source ZIP plus its SHA-256 checksum. Let the workflow attach platform
-   binaries and their checksums before publishing the completed release.
+3. The workflow assembles the three platform archives and the source ZIP from
+   `release-files.txt`, verifies their SHA-256 checksums, and attests the files.
+   The publication job makes the complete release public. To verify a download,
+   substitute the exact tag and asset filename below.
+
+   ```sh
+   gh attestation verify "$asset" --repo cleisson-labs/teams-mcp \
+     --signer-workflow cleisson-labs/.github/.github/workflows/release.yml \
+     --source-ref "refs/tags/$tag"
+   ```
 
 ## License and attribution
 

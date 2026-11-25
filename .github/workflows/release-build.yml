@@ -1,0 +1,108 @@
+name: Build and verify release assets
+
+on:
+  workflow_call:
+    outputs:
+      artifact-id:
+        description: Verified release bundle
+        value: ${{ jobs.assets.outputs.artifact-id }}
+
+permissions: {}
+
+jobs:
+  source:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Check the annotated release tag and source commit
+        id: version
+        run: |
+          version=$(python3 -c 'import tomllib; print(tomllib.load(open("Cargo.toml", "rb"))["package"]["version"])')
+          if [[ "$GITHUB_REF_TYPE" == tag ]]; then
+            test "$GITHUB_REF_NAME" = "v$version"
+            test "$(git cat-file -t "$GITHUB_REF")" = tag
+            git merge-base --is-ancestor "$GITHUB_SHA" origin/main
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+      - uses: $/.github/actions/check-source
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-part-source
+          path: dist/*-source.zip
+          if-no-files-found: error
+          retention-days: ${{ github.ref_type != 'tag' && github.event_name != 'workflow_dispatch' && 3 || 0 }}
+          compression-level: 0
+          overwrite: true
+
+  build:
+    needs: source
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            target: aarch64-apple-darwin
+          - os: macos-15-intel
+            target: x86_64-apple-darwin
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    env:
+      TARGET: ${{ matrix.target }}
+      VERSION: ${{ needs.source.outputs.version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up Rust
+        run: rustup toolchain install stable --profile minimal --target "$TARGET"
+      # Keep tag builds independent of compilation caches populated by earlier CI.
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        if: github.ref_type != 'tag'
+        with:
+          key: qualification-${{ matrix.target }}
+          cache-bin: false
+          save-if: ${{ github.event_name == 'push' && github.ref_name == github.event.repository.default_branch }}
+      - name: Test
+        run: cargo +stable test --locked
+      - name: Build
+        run: cargo +stable build --release --locked --target "$TARGET"
+      - name: Package and smoke test the executable
+        run: |
+          name="teams-mcp-v$VERSION-$TARGET"
+          mkdir "$name"
+          cp "target/$TARGET/release/teams-mcp" README.md LICENSE NOTICE "$name/"
+          tar -czf "$name.tar.gz" "$name"
+          tar -xzf "$name.tar.gz" -C "$RUNNER_TEMP"
+          test "$("$RUNNER_TEMP/$name/teams-mcp" --version)" = "teams-mcp $VERSION"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-part-${{ matrix.target }}
+          path: teams-mcp-*.tar.gz
+          if-no-files-found: error
+          retention-days: ${{ github.ref_type != 'tag' && github.event_name != 'workflow_dispatch' && 3 || 0 }}
+          compression-level: 0
+          overwrite: true
+
+  assets:
+    needs: [source, build]
+    permissions:
+      contents: read
+    uses: cleisson-labs/.github/.github/workflows/release-assets.yml@03f53ed9e71b2741c683c448a538f7a7b8aa1786 # v1.0.0
+    with:
+      assets: |
+        teams-mcp-${{ needs.source.outputs.version }}-source.zip
+        teams-mcp-v${{ needs.source.outputs.version }}-aarch64-apple-darwin.tar.gz
+        teams-mcp-v${{ needs.source.outputs.version }}-x86_64-apple-darwin.tar.gz
+        teams-mcp-v${{ needs.source.outputs.version }}-x86_64-unknown-linux-gnu.tar.gz

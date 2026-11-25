@@ -9,7 +9,6 @@ import tomllib
 import zipfile
 from pathlib import Path, PurePosixPath
 
-
 FORBIDDEN_DIRECTORIES = {
     ".private", ".git", "target", "dist", "build", "cache", ".cache",
     "__pycache__", "node_modules", "private", "profile", "profiles",

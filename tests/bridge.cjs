@@ -3,7 +3,9 @@ const assert = require('node:assert/strict');
 const {readFileSync} = require('node:fs');
 const {webcrypto, hkdfSync, createCipheriv} = require('node:crypto');
 const vm = require('node:vm');
-const source = readFileSync(new URL('../src/bridge.js', `file://${__filename}`), 'utf8');
+const {resolve} = require('node:path');
+const filename = resolve(__dirname, '../src/bridge.js');
+const bridge = new vm.Script(`(${readFileSync(filename, 'utf8')})`, {filename});
 const client = '1fec8e78-bce4-4aaf-ab1b-5451cc387264';
 const b64 = x => Buffer.from(x).toString('base64url');
 const jwt = claims => `${b64('{}')}.${b64(JSON.stringify(claims))}.synthetic`;
@@ -11,7 +13,7 @@ const claims = {oid:'user-one',tid:'tenant-one',upn:'tester@example.test',name:'
 const token = {credentialType:'AccessToken',secret:jwt(claims),target:'https://substrate.office.com/SubstrateSearch-Internal.ReadWrite',clientId:client};
 function environment(entries, cookie='', fetch=async()=>{throw Error('unexpected network')},origin='https://teams.microsoft.com') {
   const context = {localStorage:entries,sessionStorage:{},document:{cookie},location:{origin},crypto:webcrypto,TextEncoder,TextDecoder,Uint8Array,URL,URLSearchParams,AbortSignal,atob,fetch,setTimeout,Intl};
-  return vm.runInNewContext(`(${source})`,context);
+  return bridge.runInNewContext(context);
 }
 function encryptedFixture() {
   const master=Buffer.alloc(32,7), nonce=Buffer.alloc(16,9);
@@ -88,7 +90,12 @@ test('reuses Teams encrypted resource cache in browser and desktop webviews',asy
 
 test('selects the active tenant and never mixes chat credentials from another tenant',async()=>{
  const foreign={...token,secret:jwt({...claims,oid:'user-two',tid:'tenant-two',aud:'https://api.spaces.skype.com'}),target:'https://api.spaces.skype.com/.default'};
- const storage={[cacheKey]:JSON.stringify(token),['other-accesstoken']:JSON.stringify(foreign),'msal.client.active-account-filters':JSON.stringify({localAccountId:'user-one',tenantId:'tenant-one'})};
+ const storage = {
+   [cacheKey] : JSON.stringify(token),
+   'other-accesstoken' : JSON.stringify(foreign),
+   'msal.client.active-account-filters' :
+       JSON.stringify({localAccountId : 'user-one', tenantId : 'tenant-one'})
+ };
  const result=await environment(storage)({action:'status',expectedAccount:'tester@example.test'});
  assert.equal(result.ok,true);assert.equal(result.profile.tenantId,'tenant-one');assert.equal(result.capabilities.chat,false);
 });
@@ -132,11 +139,14 @@ test('native app uses its own authenticated bridge key without exposing it', asy
  };
  let nativeCalls=0;
  const context={localStorage:storage,sessionStorage:{},document:{cookie:''},location:{origin:'https://teams.microsoft.com'},crypto:webcrypto,TextEncoder,TextDecoder,Uint8Array,URL,URLSearchParams,AbortSignal,atob,fetch:async()=>{throw Error('unexpected network')},nativeModules:{Auth:{acquireEncryptionKey:async args=>{nativeCalls++;assert.ok(args.correlationId);return {result:key.toString('base64')}}}}};
- const run=vm.runInNewContext(`(${source})`,context);
- const result=await run({action:'status',nativeApp:true});
- assert.equal(result.ok,true);assert.equal(result.capabilities.chat,true);assert.equal(nativeCalls,1);
- assert.ok(!JSON.stringify(result).includes(secret));assert.ok(!JSON.stringify(result).includes(key.toString('base64')));
- assert.equal(storage['tmp.auth.v1.GLOBAL.ExportedEncryptionKey.ExportedEncryptionKey'],undefined);
+const run = bridge.runInNewContext(context);
+const result = await run({action : 'status', nativeApp : true});
+assert.equal(result.ok, true);
+assert.equal(result.capabilities.chat, true);
+assert.equal(nativeCalls, 1);
+assert.ok(!JSON.stringify(result).includes(secret));
+assert.ok(!JSON.stringify(result).includes(key.toString('base64')));
+assert.equal(storage['tmp.auth.v1.GLOBAL.ExportedEncryptionKey.ExportedEncryptionKey'], undefined);
 });
 
 test('native expired active identity cannot switch to another cached tenant',async()=>{
@@ -147,20 +157,21 @@ test('native expired active identity cannot switch to another cached tenant',asy
   'msal.other.active-account-filters':JSON.stringify({localAccountId:'other-user',tenantId:'other-tenant'})
  };
  const context={localStorage:storage,sessionStorage:{},document:{cookie:''},location:{origin:'https://teams.microsoft.com'},crypto:webcrypto,TextEncoder,TextDecoder,Uint8Array,URL,AbortSignal,atob,fetch:async()=>{throw Error('unexpected network')},nativeModules:{Auth:{acquireEncryptionKey:async()=>({result:Buffer.alloc(32,6).toString('base64')})}}};
- const result=await vm.runInNewContext(`(${source})`,context)({action:'status',nativeApp:true});
+ const result = await bridge.runInNewContext(context)({action : 'status', nativeApp : true});
  assert.equal(result.error.code,'AUTH_REQUIRED');
 });
 
 test('native bridge is not called when the app window has navigated to another origin',async()=>{
  let called=false;
  const context={localStorage:{},sessionStorage:{},document:{cookie:''},location:{origin:'https://attacker.test'},crypto:webcrypto,TextEncoder,TextDecoder,Uint8Array,URL,AbortSignal,atob,nativeModules:{Auth:{acquireEncryptionKey:async()=>{called=true;return {result:'private-key'}}}}};
- const result=await vm.runInNewContext(`(${source})`,context)({action:'status',nativeApp:true});
- assert.equal(result.error.code,'WRONG_ORIGIN');assert.equal(called,false);
+const result = await bridge.runInNewContext(context)({action : 'status', nativeApp : true});
+assert.equal(result.error.code, 'WRONG_ORIGIN');
+assert.equal(called, false);
 });
 
 test('native host errors cannot impersonate safe connector errors',async()=>{
  const context={localStorage:{},sessionStorage:{},document:{cookie:''},location:{origin:'https://teams.microsoft.com'},crypto:webcrypto,TextEncoder,TextDecoder,Uint8Array,URL,AbortSignal,atob,nativeModules:{Auth:{acquireEncryptionKey:async()=>{throw {code:'AUTH_REQUIRED',message:'synthetic-native-secret-marker'}}}}};
- const result=await vm.runInNewContext(`(${source})`,context)({action:'status',nativeApp:true});
+ const result = await bridge.runInNewContext(context)({action : 'status', nativeApp : true});
  assert.equal(result.ok,false);
  assert.ok(!JSON.stringify(result).includes('synthetic-native-secret-marker'));
  assert.equal(result.error.code,'SESSION_UNAVAILABLE');
@@ -173,7 +184,7 @@ test('a tenant constraint cannot switch away from the expired native active acco
   'tmp.auth.v1.GLOBAL.User.User':JSON.stringify({item:{profile:claims}})
  };
  const context={localStorage:storage,sessionStorage:{},document:{cookie:''},location:{origin:'https://teams.microsoft.com'},crypto:webcrypto,TextEncoder,TextDecoder,Uint8Array,URL,AbortSignal,atob,nativeModules:{Auth:{acquireEncryptionKey:async()=>({result:Buffer.alloc(32,6).toString('base64')})}}};
- const run=vm.runInNewContext(`(${source})`,context);
+ const run = bridge.runInNewContext(context);
  const result=await run({action:'status',nativeApp:true,tenantId:claims.tid});
  assert.equal(result.ok,false);
  assert.equal(result.error.code,'AUTH_REQUIRED');
@@ -216,7 +227,7 @@ test('decrypts unchanged encrypted entries once across calls',async()=>{
  const fixture=encryptedFixture();let decrypts=0;
  const subtle=new Proxy(webcrypto.subtle,{get(target,key){const value=target[key];if(key==='decrypt')return (...args)=>{decrypts++;return value.apply(target,args);};return typeof value==='function'?value.bind(target):value;}});
  const context={localStorage:{[cacheKey]:fixture.entry},sessionStorage:{},document:{cookie:fixture.cookie},location:{origin:'https://teams.microsoft.com'},crypto:{subtle,randomUUID:()=>webcrypto.randomUUID()},TextEncoder,TextDecoder,Uint8Array,URL,AbortSignal,atob,setTimeout};
- const run=vm.runInNewContext(`(${source})`,context);
+ const run = bridge.runInNewContext(context);
  assert.equal((await run({action:'status'})).ok,true);const first=decrypts;
  assert.equal((await run({action:'status'})).ok,true);
  assert.ok(first>0);assert.equal(decrypts,first);

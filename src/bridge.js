@@ -128,8 +128,15 @@
                     (entry.homeAccountId && entry.homeAccountId === chosen.entry.homeAccountId && entry.realm === claim.tid));
             }).sort((a,b) => Number(b.expiresOn || payload(b.secret).exp) - Number(a.expiresOn || payload(a.secret).exp));
             const find = predicate => own.find(e => predicate(e, payload(e.secret)))?.secret;
-            return {profile, search:find((e,p) => e.target?.includes('SubstrateSearch') && p.aud === 'https://substrate.office.com') || find(e => e.target?.includes('SubstrateSearch')),
-                spaces:find((e,p) => p.aud === 'https://api.spaces.skype.com'), csa:find((e,p) => p.aud === 'https://chatsvcagg.teams.microsoft.com')};
+            return {
+              profile,
+              search: find(
+                          (e, p) => e.target?.includes('SubstrateSearch') &&
+                              p.aud === 'https://substrate.office.com') ||
+                  find(e => e.target?.includes('SubstrateSearch')),
+              spaces: find((_entry, p) => p.aud === 'https://api.spaces.skype.com'),
+              csa: find((_entry, p) => p.aud === 'https://chatsvcagg.teams.microsoft.com')
+            };
         }
 
         const shapes = {
