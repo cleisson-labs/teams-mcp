@@ -15,6 +15,10 @@ updates:
       interval: weekly
     cooldown:
       default-days: 7
+    ignore:
+      # The 1.0.x adapter rejects non-ASCII hosts. Other 1.x minor streams select Unicode backends.
+      - dependency-name: idna_adapter
+        update-types: ['version-update:semver-minor']
     groups:
       rust:
         patterns: ['*']
